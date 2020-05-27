@@ -76,7 +76,7 @@ void loop() {
   if(Serial.available()){
     BTSerial.write(Serial.read());
   }
-
+  Serial.println((String) inTemp + ":" + outTemp);
   Serial.println(fanSpeed);
   analogWrite(fan1, fanSpeed);
   analogWrite(fan2, fanSpeed);
