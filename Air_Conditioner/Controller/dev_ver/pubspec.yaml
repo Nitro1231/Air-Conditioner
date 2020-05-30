@@ -1,5 +1,5 @@
-name: accontroller
-description: Arduino Air Conditioner Controller.
+name: devver
+description: dev ver
 
 # The following line prevents the package from being accidentally published to
 # pub.dev using `pub publish`. This is preferred for private packages.
@@ -23,8 +23,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_ble_lib: ^2.2.3
-  permission_handler: ^5.0.0+hotfix.3
 
 
   # The following adds the Cupertino Icons font to your application.
