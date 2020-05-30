@@ -1,15 +1,13 @@
-import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter_blue/flutter_blue.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
+import 'package:scoped_model/scoped_model.dart';
 
 void main() => runApp(MyApp());
 
 /// This Widget is the main application widget.
 class MyApp extends StatelessWidget {
   static const String _title = 'Air Conditioner Controller';
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -29,20 +27,20 @@ class MyApp extends StatelessWidget {
 class MyStatefulWidget extends StatefulWidget {
   MyStatefulWidget({Key key, this.title}) : super(key: key);
   final String title;
-
   @override
   _MyStatefulWidgetState createState() => _MyStatefulWidgetState();
 }
 
 enum mode { Auto, Dial, Bluetooth }
-
 class _MyStatefulWidgetState extends State<MyStatefulWidget> {
-  FlutterBlue flutterBlue = FlutterBlue.instance;
-  List<BleDeviceItem> deviceList = []; // Array that hold ble devices.
+  BluetoothState _bluetoothState = BluetoothState.UNKNOWN;
+  Timer discoverableTimeoutTimer;
+  StreamSubscription<BluetoothDiscoveryResult> streamSubscription;
+  List<BluetoothDiscoveryResult> deviceList = List<BluetoothDiscoveryResult>();
+  bool isDiscovering = false;
+  bool bleConnected = false;
 
   mode controlMode = mode.Auto;
-  bool bleConnected = true;
-  bool isScanning = false;
   int tabIndex = 0;
   double outsideTemp = 0;
   double insideTemp = 0;
@@ -55,73 +53,69 @@ class _MyStatefulWidgetState extends State<MyStatefulWidget> {
   static const TextStyle h4 =
       TextStyle(fontSize: 25, fontWeight: FontWeight.bold);
 
+  @override
   void initState() {
-    init(); //Ble Scan
     super.initState();
-  }
 
-  void init() async {
-    checkPermissions();
+    FlutterBluetoothSerial.instance.state.then((state) {
+      setState(() {
+        _bluetoothState = state;
+      });
+    });
+
+    Future.doWhile(() async {
+      // Wait if adapter not enabled
+      if (await FlutterBluetoothSerial.instance.isEnabled) {
+        return false;
+      }
+      await Future.delayed(Duration(milliseconds: 0xDD));
+      return true;
+    });
+
+    // Listen for futher state changes
+    FlutterBluetoothSerial.instance
+        .onStateChanged()
+        .listen((BluetoothState state) {
+      setState(() {
+        _bluetoothState = state;
+
+        // Discoverable mode is disabled when Bluetooth gets disabled
+        discoverableTimeoutTimer = null;
+      });
+    });
     scan();
+    //scan(); //Ble Scan
   }
 
-  checkPermissions() async {
-    if (Platform.isAndroid) {
-      if (await Permission.contacts.request().isGranted) {}
-      Map<Permission, PermissionStatus> statuses =
-          await [Permission.location].request();
-      print(statuses[Permission.location]);
+  void scan() {
+    if (!isDiscovering) {
+      isDiscovering = true;
+      streamSubscription =
+          FlutterBluetoothSerial.instance.startDiscovery().listen((r) {
+            setState(() {
+              deviceList.add(r);
+              print(r.device.name);
+            });
+          });
+      streamSubscription.onDone(() {
+        setState(() {
+          isDiscovering = false;
+        });
+      });
     }
   }
 
-  void scan() async {
-    print("Scan Start");
-    // Start scanning
-    flutterBlue.startScan(timeout: Duration(seconds: 10));
-    // Listen to scan results
-    flutterBlue.scanResults.listen((results) {
-      // do something with scan results
-      for (ScanResult r in results) {
-        print(r);
-        var name = r.device.name ?? r.advertisementData.localName;
-        if (name == "") name = "Unknown";
-        //print(r.device.name + ":" + r.advertisementData.localName);
-        var findDevice = deviceList.any((element) {
-          if (element.device.id == r.device.id) {
-            element.deviceName = name;
-            element.device = r.device;
-            element.rssi = r.rssi;
-            element.advertisementData = r.advertisementData;
-            return true;
-          }
-          return false;
-        });
-        if (!findDevice) {
-          deviceList
-              .add(BleDeviceItem(name, r.device, r.rssi, r.advertisementData));
-        }
-        setState(() {});
-      }
-    });
-    // Stop scanning
-    flutterBlue.stopScan();
+  @override
+  void dispose() {
+    FlutterBluetoothSerial.instance.setPairingRequestHandler(null);
+    discoverableTimeoutTimer?.cancel();
+
+    // Avoid memory leak (`setState` after dispose) and cancel discovery
+    streamSubscription?.cancel();
+    super.dispose();
   }
 
-  list() {
-    return ListView.builder(
-      //shrinkWrap: true,
-      itemCount: deviceList.length,
-      itemBuilder: (context, index) {
-        return ListTile(
-          title: Text(deviceList[index].deviceName),
-          subtitle: Text(deviceList[index].device.id.toString()),
-          trailing: Text("${deviceList[index].rssi}"),
-        );
-      },
-    );
-  }
-
-  void _onItemTapped(int i) {
+  void onItemTapped(int i) {
     setState(() {
       tabIndex = i;
     });
@@ -137,8 +131,44 @@ class _MyStatefulWidgetState extends State<MyStatefulWidget> {
           child: Column(
             children: <Widget>[
               Visibility(
-                  visible: tabIndex == 0, // Shows this page when tabIndex is 0.
-                  child: Expanded(child: list())),
+                visible: tabIndex == 0, // Shows this page when tabIndex is 0.
+                child: Column(
+                  children: <Widget>[
+                    SwitchListTile(
+                      title: const Text('Enable Bluetooth'),
+                      value: _bluetoothState.isEnabled,
+                      onChanged: (bool value) {
+                        // Do the request and update with the true value then
+                        future() async {
+                          // async lambda seems to not working
+                          if (value)
+                            await FlutterBluetoothSerial.instance.requestEnable();
+                          else
+                            await FlutterBluetoothSerial.instance.requestDisable();
+                        }
+                        future().then((_) {
+                          setState(() {});
+                        });
+                      },
+                    ),
+                    ExpansionTile(
+                        leading: Icon(Icons.devices),
+                        title: Text('Scanned Bluetooth Devices'),
+                        children: <Widget>[
+
+                        ]
+                    ),
+                    ExpansionTile(
+                        leading: Icon(Icons.link),
+                        title: Text('Paired Devices'),
+                        children: <Widget>[
+
+                        ]
+                    )
+                  ],
+                ),
+                //child: Expanded(child: list())
+              ),
               Visibility(
                 visible: tabIndex == 1, // Shows this page when tabIndex is 1.
                 child: (AnimatedOpacity(
@@ -357,13 +387,13 @@ class _MyStatefulWidgetState extends State<MyStatefulWidget> {
           currentIndex: tabIndex,
           selectedItemColor: Colors.cyan,
           backgroundColor: Colors.black45,
-          onTap: _onItemTapped,
+          onTap: onItemTapped,
         ),
         floatingActionButton: Visibility(
           visible: tabIndex == 0,
           child: FloatingActionButton(
             onPressed: () {
-              scan();
+              //if (!isScanning) scan();
             },
             child: Icon(Icons.bluetooth),
             backgroundColor: Colors.cyan,
@@ -372,6 +402,7 @@ class _MyStatefulWidgetState extends State<MyStatefulWidget> {
   }
 }
 
+/*
 class BleDeviceItem {
   // Ble Information
   String deviceName;
@@ -381,4 +412,4 @@ class BleDeviceItem {
 
   BleDeviceItem(
       this.deviceName, this.device, this.rssi, this.advertisementData);
-}
+}*/

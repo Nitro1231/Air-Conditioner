@@ -23,8 +23,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_blue: 0.7.2
-  permission_handler: ^5.0.0+hotfix.3
+  flutter_bluetooth_serial: ^0.2.2
+  scoped_model: ^1.0.1
 
 
   # The following adds the Cupertino Icons font to your application.
